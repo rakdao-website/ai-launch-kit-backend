@@ -18,7 +18,7 @@ from launchkit.builds.handlers import create_build_job_handlers
 from launchkit.core.config import Settings, get_settings
 from launchkit.core.logging import configure_logging
 from launchkit.deployment.handlers import create_deployment_job_handlers
-from launchkit.core.tls import outbound_verify, use_system_certificates
+from launchkit.core.tls import use_system_certificates
 from launchkit.persistence import Database, create_database
 from launchkit.worker import Worker
 from launchkit.workflows.handlers import create_workflow_job_handlers
@@ -39,7 +39,10 @@ async def _run_embedded_worker(settings: Settings, asset_store: AssetBlobStore) 
 
     logger = structlog.get_logger(__name__)
     timeout = httpx.Timeout(120, connect=10)
-    async with httpx.AsyncClient(timeout=timeout, verify=outbound_verify()) as client:
+    # Default TLS verify — do not force truststore here. When S3 is enabled we skip
+    # global inject_into_ssl (boto3 recursion); production OpenRouter works with
+    # default certs. Forcing truststore.SSLContext broke server extraction.
+    async with httpx.AsyncClient(timeout=timeout) as client:
         runtime = create_workflow_job_handlers(settings, client, asset_store)
         builds = create_build_job_handlers(settings, client, asset_store)
         deployments = create_deployment_job_handlers(settings, client, asset_store)
