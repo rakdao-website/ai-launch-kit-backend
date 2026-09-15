@@ -7,7 +7,7 @@ import ipaddress
 import logging
 import socket
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -122,22 +122,21 @@ def validate_website_url(url: str) -> str:
 
 
 async def fetch_website_html(client: httpx.AsyncClient, url: str) -> str:
-    """Download one page after resolve-then-validate-then-pin, without leaking upstream status."""
+    """Download one page after resolve-then-validate, without leaking upstream status.
+
+    DNS is resolved and checked for private/link-local addresses before each request.
+    The HTTP request uses the original hostname so normal TLS/SNI continues to work.
+    """
 
     current = validate_website_url(url)
     for _ in range(WEBSITE_MAX_REDIRECTS + 1):
-        pinned_url, hostname = await _resolve_validate_and_pin(current)
+        hostname = await _assert_public_resolution(current)
         try:
             response = await client.get(
-                pinned_url,
+                current,
                 follow_redirects=False,
                 timeout=WEBSITE_FETCH_TIMEOUT_SECONDS,
-                headers={
-                    "User-Agent": "LaunchKitBot/1.0 (+website discovery)",
-                    "Host": hostname,
-                },
-                # Connect to the pinned IP while keeping TLS SNI/cert checks on the hostname.
-                extensions={"sni_hostname": hostname},
+                headers={"User-Agent": "LaunchKitBot/1.0 (+website discovery)"},
             )
         except httpx.HTTPError as exc:
             logger.info("website_fetch_failed url_host=%s error=%s", hostname, type(exc).__name__)
@@ -234,8 +233,8 @@ def _sync_resolve_addresses(hostname: str) -> list[ipaddress.IPv4Address | ipadd
     return addresses
 
 
-async def _resolve_validate_and_pin(url: str) -> tuple[str, str]:
-    """Resolve DNS, reject non-global addresses, and rewrite the URL to the pinned IP."""
+async def _assert_public_resolution(url: str) -> str:
+    """Resolve DNS and reject any non-global address before the HTTP fetch runs."""
 
     candidate, hostname = _parse_public_web_url(url)
     _reject_literal_or_rebinding_host(hostname)
@@ -253,13 +252,7 @@ async def _resolve_validate_and_pin(url: str) -> tuple[str, str]:
     for address in resolved:
         if not address.is_global:
             raise DomainError(_PRIVATE_NETWORK_ERROR)
-
-    pinned_ip = resolved[0]
-    netloc = _format_pinned_netloc(pinned_ip, port, parsed.scheme)
-    pinned = urlunparse(
-        (parsed.scheme, netloc, parsed.path or "/", parsed.params, parsed.query, parsed.fragment)
-    )
-    return pinned, hostname
+    return hostname
 
 
 async def _resolve_host_addresses(hostname: str, port: int) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
@@ -288,15 +281,3 @@ async def _resolve_host_addresses(hostname: str, port: int) -> list[ipaddress.IP
             seen.add(key)
             addresses.append(address)
     return addresses
-
-
-def _format_pinned_netloc(
-    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
-    port: int,
-    scheme: str,
-) -> str:
-    default_port = 443 if scheme == "https" else 80
-    host = f"[{address}]" if address.version == 6 else str(address)
-    if port == default_port:
-        return host
-    return f"{host}:{port}"

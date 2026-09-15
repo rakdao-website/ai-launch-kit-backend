@@ -54,13 +54,12 @@ class TestValidateWebsiteUrl:
 
 
 class TestFetchWebsiteHtml:
-    def test_pins_resolved_public_ip_and_hides_status_codes(self) -> None:
+    def test_fetches_hostname_url_and_hides_status_codes(self) -> None:
         request_url: str | None = None
 
         async def handler(request: httpx.Request) -> httpx.Response:
             nonlocal request_url
             request_url = str(request.url)
-            assert request.headers["host"] == "example.com"
             return httpx.Response(404, text="missing")
 
         async def scenario() -> None:
@@ -74,7 +73,7 @@ class TestFetchWebsiteHtml:
 
         with pytest.raises(DomainError, match="could not be processed"):
             asyncio.run(scenario())
-        assert request_url == "https://93.184.216.34/page"
+        assert request_url == "https://example.com/page"
 
     def test_rejects_hosts_that_resolve_to_private_addresses(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -97,7 +96,7 @@ class TestFetchWebsiteHtml:
 
         async def handler(request: httpx.Request) -> httpx.Response:
             calls.append(str(request.url))
-            if request.url.host == "93.184.216.34":
+            if request.url.host == "example.com":
                 return httpx.Response(302, headers={"location": "http://127.0.0.1/secret"})
             raise AssertionError("redirect into a private address must not be followed")
 
@@ -112,7 +111,7 @@ class TestFetchWebsiteHtml:
 
         with pytest.raises(DomainError, match="private network"):
             asyncio.run(scenario())
-        assert calls == ["https://93.184.216.34/"]
+        assert calls == ["https://example.com/"]
 
 
 class TestWebsitePageText:
