@@ -1,16 +1,39 @@
 """Fetch a public website and reduce its HTML to readable text for AI extraction."""
 
+from __future__ import annotations
+
+import asyncio
 import ipaddress
+import logging
+import socket
 from html.parser import HTMLParser
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 
 from launchkit.core.exceptions import DomainError
 
+logger = logging.getLogger(__name__)
+
 WEBSITE_FETCH_TIMEOUT_SECONDS = 20.0
 WEBSITE_MAX_BYTES = 2 * 1024 * 1024
+WEBSITE_MAX_REDIRECTS = 3
+_GENERIC_FETCH_ERROR = "The website could not be processed."
+_PRIVATE_NETWORK_ERROR = "This address points to a private network and cannot be scanned."
+
 _BLOCKED_HOSTNAMES = {"localhost", "localhost.localdomain"}
+# Defense-in-depth: known DNS-rebinding / wildcard-to-arbitrary-IP services.
+_REBINDING_HOST_SUFFIXES = (
+    ".nip.io",
+    ".sslip.io",
+    ".xip.io",
+    ".traefik.me",
+    ".localtest.me",
+    ".lacolhost.com",
+    ".lvh.me",
+    ".vcap.me",
+    ".localdomain",
+)
 _SKIPPED_ELEMENTS = {"script", "style", "noscript", "svg", "template", "iframe", "head"}
 # Block ends force line breaks so headings and paragraphs stay separated.
 _BLOCK_ELEMENTS = {
@@ -93,6 +116,57 @@ def website_page_text(html: str) -> str:
 def validate_website_url(url: str) -> str:
     """Normalize a user-supplied site URL and reject anything that is not a public web page."""
 
+    candidate, hostname = _parse_public_web_url(url)
+    _reject_literal_or_rebinding_host(hostname)
+    return candidate
+
+
+async def fetch_website_html(client: httpx.AsyncClient, url: str) -> str:
+    """Download one page after resolve-then-validate-then-pin, without leaking upstream status."""
+
+    current = validate_website_url(url)
+    for _ in range(WEBSITE_MAX_REDIRECTS + 1):
+        pinned_url, hostname = await _resolve_validate_and_pin(current)
+        try:
+            response = await client.get(
+                pinned_url,
+                follow_redirects=False,
+                timeout=WEBSITE_FETCH_TIMEOUT_SECONDS,
+                headers={
+                    "User-Agent": "LaunchKitBot/1.0 (+website discovery)",
+                    "Host": hostname,
+                },
+                # Connect to the pinned IP while keeping TLS SNI/cert checks on the hostname.
+                extensions={"sni_hostname": hostname},
+            )
+        except httpx.HTTPError as exc:
+            logger.info("website_fetch_failed url_host=%s error=%s", hostname, type(exc).__name__)
+            raise DomainError(_GENERIC_FETCH_ERROR) from exc
+
+        if response.is_redirect:
+            location = response.headers.get("location")
+            if not location:
+                raise DomainError(_GENERIC_FETCH_ERROR)
+            current = validate_website_url(urljoin(current, location))
+            continue
+
+        if response.status_code >= 400:
+            logger.info(
+                "website_fetch_http_error url_host=%s status=%s",
+                hostname,
+                response.status_code,
+            )
+            raise DomainError(_GENERIC_FETCH_ERROR)
+
+        content_type = response.headers.get("content-type", "").lower()
+        if content_type and "html" not in content_type and "text" not in content_type:
+            raise DomainError("This address is not a web page, so it cannot be scanned.")
+        return response.text[:WEBSITE_MAX_BYTES]
+
+    raise DomainError(_GENERIC_FETCH_ERROR)
+
+
+def _parse_public_web_url(url: str) -> tuple[str, str]:
     candidate = url.strip()
     if not candidate:
         raise DomainError("Enter your website address.")
@@ -102,39 +176,127 @@ def validate_website_url(url: str) -> str:
     if parsed.scheme not in {"http", "https"}:
         raise DomainError("The website address must start with http:// or https://.")
     hostname = (parsed.hostname or "").lower()
-    if hostname in _BLOCKED_HOSTNAMES:
-        raise DomainError("This address points to a private network and cannot be scanned.")
     if not hostname or "." not in hostname:
         # Single-label hosts (intranet names) are not reachable public sites.
         raise DomainError("Enter a full public website address such as https://example.com.")
+    if hostname in _BLOCKED_HOSTNAMES:
+        raise DomainError(_PRIVATE_NETWORK_ERROR)
+    return candidate, hostname
+
+
+def _reject_literal_or_rebinding_host(hostname: str) -> None:
+    if any(hostname == suffix.lstrip(".") or hostname.endswith(suffix) for suffix in _REBINDING_HOST_SUFFIXES):
+        raise DomainError(_PRIVATE_NETWORK_ERROR)
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError:
         address = None
-    if address is not None and not address.is_global:
-        raise DomainError("This address points to a private network and cannot be scanned.")
-    return candidate
+    if address is not None:
+        if not address.is_global:
+            raise DomainError(_PRIVATE_NETWORK_ERROR)
+        return
+    # OS resolvers accept decimal/hex/odd dotted forms that ipaddress rejects
+    # (e.g. 2130706433, 0x7f.0x0.0x0.0x1). Reject those that land on non-global IPs.
+    if _looks_like_encoded_ip(hostname):
+        for resolved in _sync_resolve_addresses(hostname):
+            if not resolved.is_global:
+                raise DomainError(_PRIVATE_NETWORK_ERROR)
 
 
-async def fetch_website_html(client: httpx.AsyncClient, url: str) -> str:
-    """Download one page of the user's existing website, capped in size and time."""
+def _looks_like_encoded_ip(hostname: str) -> bool:
+    if not hostname or any(char.isalpha() and char.lower() not in "abcdefx" for char in hostname):
+        return False
+    return any(char.isdigit() for char in hostname)
+
+
+def _sync_resolve_addresses(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    try:
+        infos = socket.getaddrinfo(
+            hostname,
+            None,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
+        )
+    except OSError:
+        return []
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    seen: set[str] = set()
+    for info in infos:
+        raw_ip = info[4][0]
+        try:
+            address = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+        key = str(address)
+        if key not in seen:
+            seen.add(key)
+            addresses.append(address)
+    return addresses
+
+
+async def _resolve_validate_and_pin(url: str) -> tuple[str, str]:
+    """Resolve DNS, reject non-global addresses, and rewrite the URL to the pinned IP."""
+
+    candidate, hostname = _parse_public_web_url(url)
+    _reject_literal_or_rebinding_host(hostname)
+    parsed = urlparse(candidate)
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
 
     try:
-        response = await client.get(
-            url,
-            follow_redirects=True,
-            timeout=WEBSITE_FETCH_TIMEOUT_SECONDS,
-            headers={"User-Agent": "LaunchKitBot/1.0 (+website discovery)"},
+        address = ipaddress.ip_address(hostname)
+        resolved = [address]
+    except ValueError:
+        resolved = await _resolve_host_addresses(hostname, port)
+
+    if not resolved:
+        raise DomainError(_GENERIC_FETCH_ERROR)
+    for address in resolved:
+        if not address.is_global:
+            raise DomainError(_PRIVATE_NETWORK_ERROR)
+
+    pinned_ip = resolved[0]
+    netloc = _format_pinned_netloc(pinned_ip, port, parsed.scheme)
+    pinned = urlunparse(
+        (parsed.scheme, netloc, parsed.path or "/", parsed.params, parsed.query, parsed.fragment)
+    )
+    return pinned, hostname
+
+
+async def _resolve_host_addresses(hostname: str, port: int) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+            proto=socket.IPPROTO_TCP,
         )
-    except httpx.HTTPError as exc:
-        raise DomainError(
-            "The website could not be reached. Check the address and try again."
-        ) from exc
-    if response.status_code >= 400:
-        raise DomainError(
-            f"The website responded with an error (HTTP {response.status_code})."
-        )
-    content_type = response.headers.get("content-type", "").lower()
-    if content_type and "html" not in content_type and "text" not in content_type:
-        raise DomainError("This address is not a web page, so it cannot be scanned.")
-    return response.text[:WEBSITE_MAX_BYTES]
+    except OSError as exc:
+        logger.info("website_dns_failed host=%s error=%s", hostname, type(exc).__name__)
+        raise DomainError(_GENERIC_FETCH_ERROR) from exc
+
+    addresses: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    seen: set[str] = set()
+    for info in infos:
+        sockaddr = info[4]
+        raw_ip = sockaddr[0]
+        try:
+            address = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+        key = str(address)
+        if key not in seen:
+            seen.add(key)
+            addresses.append(address)
+    return addresses
+
+
+def _format_pinned_netloc(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    port: int,
+    scheme: str,
+) -> str:
+    default_port = 443 if scheme == "https" else 80
+    host = f"[{address}]" if address.version == 6 else str(address)
+    if port == default_port:
+        return host
+    return f"{host}:{port}"

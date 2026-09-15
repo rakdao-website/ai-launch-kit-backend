@@ -2,13 +2,13 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["local", "test", "staging", "production"]
-AuthMode = Literal["testing", "fixed_otp"]
+AuthMode = Literal["testing", "fixed_otp", "oauth"]
 
 
 class Settings(BaseSettings):
@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://launchkit:launchkit@localhost:5432/launchkit"
     database_echo: bool = False
     testing_user_id: str = "user_testing"
+    # oauth: InnovationCity PKCE (required for staging/production).
+    # fixed_otp: local/test only — never ship a static OTP to shared environments.
+    # testing: bypass auth with testing_user_id (unit/integration harnesses).
     auth_mode: AuthMode = "testing"
     auth_email: str = "test@innovationcity.com"
     auth_otp: SecretStr | None = None
@@ -104,6 +107,28 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @model_validator(mode="after")
+    def reject_fixed_otp_outside_local_test(self) -> Self:
+        """Fixed OTP must never be reachable on shared/public deployments."""
+
+        if self.auth_mode != "fixed_otp":
+            return self
+        if self.environment not in {"local", "test"}:
+            raise ValueError(
+                "LAUNCHKIT_AUTH_MODE=fixed_otp is only allowed when "
+                "LAUNCHKIT_ENVIRONMENT is local or test; use oauth for shared environments"
+            )
+        site = (self.site_url or "").strip().lower()
+        public_https = site.startswith("https://") and not any(
+            marker in site for marker in ("localhost", "127.0.0.1", "[::1]")
+        )
+        if public_https:
+            raise ValueError(
+                "LAUNCHKIT_AUTH_MODE=fixed_otp cannot be used with a public "
+                "LAUNCHKIT_SITE_URL; use oauth instead"
+            )
+        return self
 
     # InnovationCity OAuth PKCE (app-auth-service-nodejs).
     # Register client_id + redirect_uri + post_logout_redirect_uri with WeCan.

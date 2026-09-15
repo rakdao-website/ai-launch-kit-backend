@@ -48,9 +48,9 @@ LAUNCHKIT_LOG_JSON=true
 LAUNCHKIT_DATABASE_URL=postgresql+asyncpg://launchkit:<url-encoded-password>@postgres:5432/launchkit
 LAUNCHKIT_DATABASE_ECHO=false
 
-LAUNCHKIT_AUTH_MODE=fixed_otp
-LAUNCHKIT_AUTH_EMAIL=test@innovationcity.com
-LAUNCHKIT_AUTH_OTP=123456
+LAUNCHKIT_AUTH_MODE=oauth
+LAUNCHKIT_AUTH_EMAIL=
+LAUNCHKIT_AUTH_OTP=
 LAUNCHKIT_AUTH_TOKEN_SECRET=<at-least-32-random-bytes>
 LAUNCHKIT_AUTH_TOKEN_TTL_SECONDS=28800
 
@@ -104,7 +104,7 @@ account; a real team value must start with `team_`.
 
 ## Staging acceptance
 
-Log in with `test@innovationcity.com` and `123456`, complete one full workflow,
+Log in through InnovationCity OAuth (WeCan-registered client), complete one full workflow,
 refresh during processing, download the ZIP, and create a Vercel claim deployment.
 Confirm a missing or expired token returns `401`. Record only internal IDs and
 sanitized logs, never provider references, tokens, claim codes, or customer data.

@@ -21,6 +21,10 @@ class AuthenticationError(ApplicationError):
     """Raised when staging credentials or access tokens are invalid."""
 
 
+class RateLimitError(ApplicationError):
+    """Raised when a caller exceeds an application rate limit."""
+
+
 class ProviderError(ApplicationError):
     """Normalized external-provider failure without SDK-specific objects."""
 

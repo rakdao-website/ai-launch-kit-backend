@@ -18,6 +18,7 @@ from launchkit.core.exceptions import (
     ConfigurationError,
     DomainError,
     ProviderError,
+    RateLimitError,
 )
 from launchkit.deployment.service import DeploymentNotFoundError
 from launchkit.deployment.webhooks import (
@@ -72,6 +73,15 @@ def register_error_handlers(app: FastAPI) -> None:
             status_code=401,
             code="authentication_required",
             message=str(exc),
+        )
+
+    @app.exception_handler(RateLimitError)
+    async def handle_rate_limit(request: Request, exc: RateLimitError) -> JSONResponse:
+        return error_response(
+            request,
+            status_code=429,
+            code="rate_limited",
+            message=str(exc) or "Too many requests. Try again later.",
         )
 
     @app.exception_handler(RequestValidationError)

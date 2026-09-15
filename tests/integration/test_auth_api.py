@@ -1,11 +1,13 @@
-"""Restricted staging authentication and readiness contracts."""
+"""Restricted local/test authentication and readiness contracts."""
 
 import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from launchkit.core.config import Settings
 from launchkit.main import create_app
@@ -19,8 +21,9 @@ def auth_client(tmp_path: Path) -> Iterator[TestClient]:
         environment="test",
         auth_mode="fixed_otp",
         auth_email="test@innovationcity.com",
-        auth_otp="123456",
+        auth_otp="847291",
         auth_token_secret="a-long-test-token-secret-that-is-not-used-in-production",
+        site_url="http://localhost:8000",
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'auth.sqlite3').as_posix()}",
         frontend_origins="https://app.example",
         _env_file=None,
@@ -47,7 +50,7 @@ def test_fixed_account_login_protects_projects_and_allows_readiness(tmp_path: Pa
         )
         verified = client.post(
             "/api/v1/auth/verify",
-            json={"email": "test@innovationcity.com", "code": "123456"},
+            json={"email": "test@innovationcity.com", "code": "847291"},
         )
         token = verified.json()["accessToken"]
         created = client.post(
@@ -85,3 +88,25 @@ def test_fixed_account_rejects_wrong_email_code_and_token(tmp_path: Path) -> Non
     assert wrong_email.status_code == 401
     assert wrong_code.status_code == 401
     assert wrong_token.status_code == 401
+
+
+def test_fixed_otp_rejected_for_public_deployments() -> None:
+    with pytest.raises(ValidationError, match="public"):
+        Settings(
+            environment="test",
+            auth_mode="fixed_otp",
+            auth_otp="847291",
+            site_url="https://launchkit-api-uat.innovationcity.com",
+            _env_file=None,
+        )
+
+
+def test_fixed_otp_rejected_outside_local_test() -> None:
+    with pytest.raises(ValidationError, match="fixed_otp"):
+        Settings(
+            environment="staging",
+            auth_mode="fixed_otp",
+            auth_otp="847291",
+            site_url="http://localhost:8000",
+            _env_file=None,
+        )
