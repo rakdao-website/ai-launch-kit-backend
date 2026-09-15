@@ -51,6 +51,46 @@ def strip_code_fence(raw: str) -> str:
     return re.sub(r"\s*```$", "", value, flags=re.IGNORECASE).strip()
 
 
+def coerce_profile_value(value: object) -> object:
+    """Normalize model JSON quirks into the string fields our schema expects."""
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return "" if value is None else value if isinstance(value, str) else str(value)
+    if isinstance(value, list):
+        parts = [str(coerce_profile_value(item)).strip() for item in value]
+        return " · ".join(part for part in parts if part)
+    if isinstance(value, Mapping):
+        parts = [
+            f"{key}: {coerce_profile_value(item)}".strip()
+            for key, item in value.items()
+            if item is not None and str(item).strip()
+        ]
+        return " · ".join(parts)
+    return str(value)
+
+
+def coerce_profile_payload(payload: object) -> object:
+    """Coerce nested profile extraction JSON before Pydantic validation."""
+
+    if not isinstance(payload, Mapping):
+        return payload
+    result = dict(payload)
+    fields = result.get("fields")
+    if isinstance(fields, Mapping):
+        result["fields"] = {
+            key: coerce_profile_value(value) for key, value in fields.items()
+        }
+    hints = result.get("designHints")
+    if hints is None:
+        hints = result.get("design_hints")
+    if isinstance(hints, Mapping):
+        coerced = {key: coerce_profile_value(value) for key, value in hints.items()}
+        result["designHints"] = coerced
+        if "design_hints" in result:
+            result["design_hints"] = coerced
+    return result
+
+
 def message_text(content: object) -> str:
     """Normalize OpenRouter message content to a single string."""
 
@@ -309,7 +349,7 @@ class OpenRouterAdapter:
     @staticmethod
     def _profile_result(payload: object) -> ProfileFieldExtraction:
         try:
-            return ProfileFieldExtraction.model_validate(payload)
+            return ProfileFieldExtraction.model_validate(coerce_profile_payload(payload))
         except ValidationError as exc:
             raise ProviderError(
                 "OpenRouter returned invalid profile fields", retryable=False

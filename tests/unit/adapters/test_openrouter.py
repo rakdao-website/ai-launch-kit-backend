@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from launchkit.adapters.llm_queue import RequestQueue
-from launchkit.adapters.openrouter import OpenRouterAdapter, strip_code_fence
+from launchkit.adapters.openrouter import OpenRouterAdapter, coerce_profile_payload, strip_code_fence
 from launchkit.core.exceptions import ConfigurationError, ProviderError
 
 
@@ -39,6 +39,57 @@ def test_adapter_requires_key_and_strips_supported_fences() -> None:
     with pytest.raises(ConfigurationError):
         OpenRouterAdapter(httpx.AsyncClient(), RequestQueue(), api_key="")
     assert strip_code_fence("```tsx\n<div />\n```") == "<div />"
+
+
+def test_coerce_profile_payload_flattens_list_and_dict_fields() -> None:
+    coerced = coerce_profile_payload(
+        {
+            "fields": {
+                "companyName": "Velora Atelier",
+                "testimonials": [
+                    "The Caspian Weekender survived 18 months of DXB hops. — Maya Al-Hassan",
+                    "Booked a Friday fitting. — Sara Noureddine",
+                ],
+                "socials": {
+                    "Instagram": "@velora.atelier",
+                    "LinkedIn": "linkedin.com/company/velora-atelier",
+                },
+            },
+            "designHints": {"tagline": "Hand-finished leather", "cta": ["Book a fitting"]},
+        }
+    )
+    fields = coerced["fields"]
+    assert fields["companyName"] == "Velora Atelier"
+    assert "Maya Al-Hassan" in fields["testimonials"]
+    assert "Sara Noureddine" in fields["testimonials"]
+    assert isinstance(fields["testimonials"], str)
+    assert "Instagram: @velora.atelier" in fields["socials"]
+    assert isinstance(fields["socials"], str)
+    assert coerced["designHints"]["cta"] == "Book a fitting"
+
+
+def test_extract_profile_fields_accepts_list_and_dict_values() -> None:
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return response(
+            {
+                "content": json.dumps(
+                    {
+                        "fields": {
+                            "companyName": "Velora Atelier",
+                            "testimonials": ["Quote one", "Quote two"],
+                            "socials": {"Instagram": "@velora.atelier"},
+                        },
+                        "designHints": {"tagline": "Gulf pace of life", "cta": "Book a fitting"},
+                    }
+                )
+            }
+        )
+
+    adapter = adapter_for(httpx.MockTransport(handle))
+    result = asyncio.run(adapter.extract_profile_fields("profile"))
+    assert result.fields.company_name == "Velora Atelier"
+    assert "Quote one" in (result.fields.testimonials or "")
+    assert "Instagram: @velora.atelier" in (result.fields.socials or "")
 
 
 def test_generate_text_sends_normalized_request() -> None:
