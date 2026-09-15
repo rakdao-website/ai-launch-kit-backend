@@ -272,7 +272,8 @@ def test_reconciliation_completes_when_webhook_is_missing(tmp_path: Path) -> Non
         completed = client.get(f"/api/v1/builds/{queued.json()['id']}")
 
     assert completed.json()["status"] == "completed"
-    assert v0.status_calls == 1
+    # reconcile get_status + post-download refresh inside _complete
+    assert v0.status_calls == 2
 
 
 def test_reconciliation_times_out_without_querying_provider(tmp_path: Path) -> None:

@@ -37,6 +37,7 @@ from launchkit.planning.models import PlannedPage, SitePlan
 from launchkit.planning.text import render_plan_text
 from launchkit.profiles import ExtractedImage
 from launchkit.projects.catalogs import BUSINESS_CATEGORIES
+from launchkit.projects.grounding import business_form_for_generation
 from launchkit.projects.models import BusinessDraft, DesignDraft, PageLayout
 
 CATEGORY_LABELS = {item.id: item.label for item in BUSINESS_CATEGORIES}
@@ -79,12 +80,14 @@ class BuildJobHandlers:
         v0: V0BuildGateway | None,
         brief_service: BriefPreparer | None,
         catalogs: CatalogPreparer | None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._settings = settings
         self._asset_store = asset_store
         self._v0 = v0
         self._brief_service = brief_service
         self._catalogs = catalogs
+        self._http_client = http_client
 
     @property
     def handlers(self) -> dict[str, Callable[[JobRecord, AsyncSession], Awaitable[None]]]:
@@ -132,7 +135,18 @@ class BuildJobHandlers:
             )
             await session.commit()
             if result.status is PipelineStatus.COMPLETED:
-                await self._complete(build, result, result.chat_id, session)
+                demo = safe_provider_url(result.demo_url)
+                if demo and not await demo_url_ready(self._http_client, demo):
+                    await transition_build(
+                        repository,
+                        build,
+                        "running",
+                        stage="awaiting_preview",
+                        message="Website code is ready; waiting for the live preview to respond",
+                    )
+                    await self._schedule(build, repository)
+                else:
+                    await self._complete(build, result, result.chat_id, session)
             elif result.status is PipelineStatus.FAILED:
                 await transition_build(
                     repository,
@@ -190,6 +204,20 @@ class BuildJobHandlers:
         try:
             result = await self._v0.get_status(reference.reference_value)
             if result.status is PipelineStatus.COMPLETED:
+                demo = safe_provider_url(result.demo_url)
+                waiting = bool(demo) and not await demo_url_ready(self._http_client, demo)
+                # Don't block forever if the preview host stays on a Next 404 shell.
+                force_complete = build.reconcile_attempts >= 12
+                if waiting and not force_complete:
+                    await transition_build(
+                        repository,
+                        build,
+                        "running",
+                        stage="awaiting_preview",
+                        message="Website code is ready; waiting for the live preview to respond",
+                    )
+                    await self._schedule(build, repository)
+                    return
                 await transition_build(
                     repository,
                     build,
@@ -269,8 +297,16 @@ class BuildJobHandlers:
                 reference_value=result.version_id,
             )
         build.archive_asset_id = asset.id
-        build.preview_url = safe_provider_url(result.demo_url)
-        build.web_url = safe_provider_url(result.web_url)
+        # Re-poll once so preview_url gets a fresh demo host/token after ZIP download.
+        try:
+            refreshed = await self._v0.get_status(chat_id)
+            demo = safe_provider_url(refreshed.demo_url) or safe_provider_url(result.demo_url)
+            web = safe_provider_url(refreshed.web_url) or safe_provider_url(result.web_url)
+        except ProviderError:
+            demo = safe_provider_url(result.demo_url)
+            web = safe_provider_url(result.web_url)
+        build.preview_url = demo
+        build.web_url = web
         build.file_manifest = [{"name": name} for name in result.files]
         build.next_reconcile_at = None
         build.completed_at = datetime.now(UTC)
@@ -288,11 +324,14 @@ class BuildJobHandlers:
     async def _prompt(self, project: ProjectRecord, session: AsyncSession) -> str:
         if self._brief_service is None or self._catalogs is None:
             raise ConfigurationError("Build prompt services are not configured")
-        form = BusinessDraft.model_validate(project.business)
-        if not form.industry:
-            form = form.model_copy(
-                update={"industry": CATEGORY_LABELS.get(form.category_id, form.category_id)}
-            )
+        form = business_form_for_generation(
+            project.business,
+            project.extracted_profile_fields,
+            category_fallback_industry=CATEGORY_LABELS.get(
+                str(project.business.get("categoryId") or "tech-saas"),
+                str(project.business.get("categoryId") or "tech-saas"),
+            ),
+        )
         design = DesignDraft.model_validate(project.design).to_preferences()
         plan = page_layout_to_plan(PageLayout.model_validate(project.page_layout))
         mockup = await session.get(MockupRecord, project.selected_mockup_id)
@@ -348,7 +387,9 @@ def create_build_job_handlers(
         settings.openrouter_api_key.get_secret_value() if settings.openrouter_api_key else ""
     )
     if not v0_key or not openrouter_key:
-        return BuildJobHandlers(settings, asset_store, v0=None, brief_service=None, catalogs=None)
+        return BuildJobHandlers(
+            settings, asset_store, v0=None, brief_service=None, catalogs=None, http_client=client
+        )
     queue = RequestQueue(
         max_concurrent=settings.openrouter_max_concurrent,
         min_gap_seconds=settings.openrouter_min_request_gap_ms / 1000,
@@ -382,6 +423,7 @@ def create_build_job_handlers(
                 client, api_key=pexels_key, base_url=settings.pexels_base_url
             ),
         ),
+        http_client=client,
     )
 
 
@@ -399,6 +441,32 @@ def page_layout_to_plan(layout: PageLayout) -> SitePlan:
         for index, page in enumerate(layout.pages)
     ]
     return SitePlan(pages=pages, raw=render_plan_text(pages))
+
+
+async def demo_url_ready(client: httpx.AsyncClient | None, demo_url: str) -> bool:
+    """Return True when the v0 demo host looks like a live site.
+
+    Rejects connection failures, non-200 responses, and the common Next.js
+    ``404 | This page could not be found.`` shell that still returns HTTP 200.
+    """
+
+    if client is None:
+        return True
+    try:
+        response = await client.get(
+            demo_url,
+            timeout=httpx.Timeout(5.0, read=8.0),
+            headers={"User-Agent": "launchkit-readiness-probe"},
+            follow_redirects=True,
+        )
+        if response.status_code != 200:
+            return False
+        body = response.text[:4_000].lower()
+        if "this page could not be found" in body or "404 |" in body:
+            return False
+        return True
+    except httpx.HTTPError:
+        return False
 
 
 async def uploaded_images(

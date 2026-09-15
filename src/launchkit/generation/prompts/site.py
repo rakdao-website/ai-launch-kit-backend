@@ -217,6 +217,17 @@ USE THIS EXACT FOOTER (paste it as-is):
 {footer_html}"""
 
 
+def _v0_route_for_page(page: PlannedPage) -> str:
+    """Canonical Next.js App Router path for a planned page."""
+
+    if page.is_home:
+        return "/"
+    slug = page.slug.strip("/").lower()
+    if slug in {"", "index", "home"}:
+        return "/"
+    return f"/{slug}"
+
+
 def build_v0_multi_page_brief(
     brief: str,
     chosen_mockup_html: str,
@@ -224,11 +235,16 @@ def build_v0_multi_page_brief(
     image_catalog_by_page: Mapping[str, str],
 ) -> str:
     page_specs = "\n\n".join(
-        f"""### {page.name} ({"home page" if page.is_home else page.slug})
+        f"""### {page.name}
+Route: `{_v0_route_for_page(page)}`
+App Router file: {"app/page.tsx" if _v0_route_for_page(page) == "/" else f"app/{page.slug.strip('/')}/page.tsx"}
 Purpose: {page.purpose}
 Sections: {", ".join(page.sections)}
 {image_catalog_by_page.get(page.name, "No images assigned — use styled color panels instead.")}"""
         for page in pages
+    )
+    route_list = "\n".join(
+        f"- {page.name} → `{_v0_route_for_page(page)}`" for page in pages
     )
     return f"""Build a polished, multi-page marketing website as a Next.js app.
 
@@ -247,8 +263,17 @@ across every page (don't copy it verbatim, follow its aesthetic):
 PAGES TO BUILD (build exactly these, each as its own route):
 {page_specs}
 
+ROUTING CONTRACT (mandatory — broken nav is unacceptable):
+{route_list}
+- The home page MUST live at `/` via `app/page.tsx`. Never use `/index`, `/home`, or `/index.html` as the home route.
+- Every other page MUST live at exactly the Route shown above (e.g. `/about`, `/contact`). Do not invent alternate slugs from display names (no `/about-us` when the route is `/about`).
+- Shared sticky nav and footer Links/hrefs MUST use ONLY the routes listed above — every nav item must resolve to a page that exists.
+- Do not add nav items for pages that are not in the list. Do not leave placeholder `#` links for primary navigation.
+- After building, mentally click every header nav link: each must render its page, never a 404.
+
 Every page shares one sticky nav (linking to all pages above) and one footer. Every primary
 call-to-action links to the contact/booking/order page. Do not leave any button non-functional.
 Do not invent stats, testimonials, addresses, or team members beyond the fact sheet above — if a
 conventional section (like testimonials) has no real content in the fact sheet, omit it rather
-than inventing one."""
+than inventing one. Prefer dense, specific copy from the fact sheet (product names, prices,
+phone, hours, address) over generic filler."""

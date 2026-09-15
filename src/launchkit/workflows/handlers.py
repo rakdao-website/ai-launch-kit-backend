@@ -23,7 +23,8 @@ from launchkit.persistence.repositories import PersistenceRepository
 from launchkit.profiles import ExtractedImage, ProfileExtractionService
 from launchkit.profiles.website import fetch_website_html, website_page_text
 from launchkit.projects.catalogs import BUSINESS_CATEGORIES
-from launchkit.projects.models import BusinessDraft, DesignDraft
+from launchkit.projects.grounding import business_form_for_generation, merge_empty
+from launchkit.projects.models import DesignDraft
 from launchkit.workflows.service import asset_view, mockup_view
 
 CATEGORY_LABELS = {item.id: item.label for item in BUSINESS_CATEGORIES}
@@ -219,11 +220,14 @@ class WorkflowJobHandlers:
             if project is None:
                 raise RuntimeError("Mockup project is missing")
             repository = PersistenceRepository(session)
-            form = BusinessDraft.model_validate(project.business)
-            if not form.industry:
-                form = form.model_copy(
-                    update={"industry": CATEGORY_LABELS.get(form.category_id, form.category_id)}
-                )
+            form = business_form_for_generation(
+                project.business,
+                project.extracted_profile_fields,
+                category_fallback_industry=CATEGORY_LABELS.get(
+                    str(project.business.get("categoryId") or "tech-saas"),
+                    str(project.business.get("categoryId") or "tech-saas"),
+                ),
+            )
             design = DesignDraft.model_validate(project.design).to_preferences()
             uploaded = await self._uploaded_images(repository, project.id)
             generated = await self._mockup_service.generate(form, design, uploaded)
@@ -365,10 +369,4 @@ def decode_data_url(value: str) -> tuple[bytes, str]:
     return base64.b64decode(encoded, validate=True), content_type
 
 
-def merge_empty(current: dict[str, object], extracted: dict[str, object]) -> dict[str, object]:
-    merged = dict(current)
-    for key, value in extracted.items():
-        existing = merged.get(key)
-        if value is not None and value != "" and (existing is None or existing == ""):
-            merged[key] = value
-    return merged
+__all__ = ("WorkflowJobHandlers", "create_workflow_job_handlers", "decode_data_url", "merge_empty")

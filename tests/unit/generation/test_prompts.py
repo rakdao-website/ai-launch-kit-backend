@@ -201,11 +201,15 @@ def test_v0_brief_renders_assigned_and_fallback_image_catalogs() -> None:
         {"Home": "Hero: /hero.jpg"},
     )
 
-    assert "### Home (home page)" in prompt
+    assert "### Home" in prompt
+    assert "Route: `/`" in prompt
     assert "Hero: /hero.jpg" in prompt
-    assert "### Book a Demo (book-a-demo)" in prompt
+    assert "### Book a Demo" in prompt
+    assert "Route: `/book-a-demo`" in prompt
     assert "No images assigned — use styled color panels instead." in prompt
     assert "build exactly these, each as its own route" in prompt
+    assert "ROUTING CONTRACT" in prompt
+    assert "Never use `/index`" in prompt
 
 
 def test_full_prompt_outputs_match_characterization_digests() -> None:
@@ -246,7 +250,7 @@ def test_full_prompt_outputs_match_characterization_digests() -> None:
         "plan": "e3691bf101904ed3d50603cc84d63e647b7824c791330f88e954b76ed5618fb0",
         "home": "f9da7a8ea5dbd454bcceae19b3d033b622132c613826e92bf3b9347a114667ca",
         "inner": "921c4024007244c4a1fe5c6863304e844998127adf8a0f7531216ce2454943c9",
-        "v0": "1f74361220d03fc0f65a62b4526e0d8103d98a6c490d0aa98332e9a2d2b54d1f",
+        "v0": "98f458657a453547c66120c57e2e3f5c9a13a18a7d0aabf71c0e1b88dcd2a679",
     }
 
     assert {name: _digest(value) for name, value in outputs.items()} == expected

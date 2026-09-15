@@ -14,7 +14,7 @@ from launchkit.assets import create_asset_store, load_dotenv_file
 from launchkit.builds.handlers import create_build_job_handlers
 from launchkit.core.config import Settings, get_settings
 from launchkit.core.logging import configure_logging
-from launchkit.core.tls import use_system_certificates
+from launchkit.core.tls import outbound_verify, use_system_certificates
 from launchkit.deployment.handlers import create_deployment_job_handlers
 from launchkit.persistence import PersistenceRepository, create_database
 from launchkit.persistence.models import JobRecord
@@ -95,7 +95,7 @@ async def _main(once: bool) -> None:
     use_system_certificates(enabled=not bool(settings.s3_bucket))
     asset_store = create_asset_store(settings)
     timeout = httpx.Timeout(120, connect=10)
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, verify=outbound_verify()) as client:
         runtime = create_workflow_job_handlers(settings, client, asset_store)
         builds = create_build_job_handlers(settings, client, asset_store)
         deployments = create_deployment_job_handlers(settings, client, asset_store)
