@@ -6,6 +6,13 @@ from typing import Any, Mapping
 
 from launchkit.projects.models import BusinessDraft
 
+# designHints land in extractedProfileFields but are not BusinessDraft fields.
+_BUSINESS_KEYS = frozenset(BusinessDraft.model_fields) | frozenset(
+    (field.alias or name)
+    for name, field in BusinessDraft.model_fields.items()
+    if field.alias
+)
+
 
 def merge_empty(current: dict[str, object], extracted: dict[str, object]) -> dict[str, object]:
     """Fill empty current keys from extracted values without overwriting edits."""
@@ -33,7 +40,9 @@ def business_form_for_generation(
     """
 
     merged = merge_empty(dict(business or {}), dict(extracted_profile_fields or {}))
-    form = BusinessDraft.model_validate(merged)
+    # Drop design-only extract keys (tagline/cta) and any other extras.
+    cleaned = {key: value for key, value in merged.items() if key in _BUSINESS_KEYS}
+    form = BusinessDraft.model_validate(cleaned)
     if not form.industry and category_fallback_industry:
         form = form.model_copy(update={"industry": category_fallback_industry})
     return form

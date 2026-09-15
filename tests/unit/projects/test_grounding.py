@@ -43,3 +43,16 @@ def test_business_form_for_generation_merges_extract_into_thin_business() -> Non
     assert "4,200" in form.stats
     assert form.tone.startswith("Warm")
     assert form.industry == "Retail"
+
+
+def test_business_form_ignores_design_hint_keys_from_extract() -> None:
+    form = business_form_for_generation(
+        {"companyName": "Velora Atelier", "categoryId": "retail-ecommerce"},
+        {
+            "products": "Caspian Weekender",
+            "tagline": "Hand-finished leather, made for the Gulf pace of life",
+            "cta": "Book a fitting",
+        },
+    )
+    assert form.company_name == "Velora Atelier"
+    assert "Caspian Weekender" in form.products
