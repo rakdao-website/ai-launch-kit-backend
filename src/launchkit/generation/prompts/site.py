@@ -247,10 +247,10 @@ across every page (don't copy it verbatim, follow its aesthetic):
 PAGES TO BUILD (build exactly these, each as its own route):
 {page_specs}
 
-Every page shares one sticky nav (linking to all pages above) and one footer. Every primary
-call-to-action links to the contact/booking/order page. Do not leave any button non-functional.
-Every nav link must point only to a page you built — never leave a route that returns 404; if
-content is thin, use a simple placeholder page instead of a broken route.
+Every page shares one sticky nav (linking to all pages above) and one footer.
+Nav and CTA links may ONLY target routes you actually built. If a page was planned but you did
+not create that route (or a CTA has no matching page — e.g. Contact, Book a Fitting), set
+href="#" instead of a path that 404s. Never invent a broken route.
 Do not invent stats, testimonials, addresses, or team members beyond the fact sheet above — if a
 conventional section (like testimonials) has no real content in the fact sheet, omit it rather
 than inventing one."""
