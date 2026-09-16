@@ -206,7 +206,8 @@ def test_v0_brief_renders_assigned_and_fallback_image_catalogs() -> None:
     assert "### Book a Demo (book-a-demo)" in prompt
     assert "No images assigned — use styled color panels instead." in prompt
     assert "build exactly these, each as its own route" in prompt
-    assert "never leave a route that returns 404" in prompt
+    assert 'href="#"' in prompt
+    assert "Book a Fitting" in prompt
 
 
 def test_full_prompt_outputs_match_characterization_digests() -> None:
@@ -247,7 +248,7 @@ def test_full_prompt_outputs_match_characterization_digests() -> None:
         "plan": "e3691bf101904ed3d50603cc84d63e647b7824c791330f88e954b76ed5618fb0",
         "home": "f9da7a8ea5dbd454bcceae19b3d033b622132c613826e92bf3b9347a114667ca",
         "inner": "921c4024007244c4a1fe5c6863304e844998127adf8a0f7531216ce2454943c9",
-        "v0": "7e844f6bd21cde2a92d9d3975b514e4d059d373bdae11fe551d3cffc97e79858",
+        "v0": "f9d6f343deb0bda0960299c4658f0c9ecd2763698dce768a1c683c552ad68acc",
     }
 
     assert {name: _digest(value) for name, value in outputs.items()} == expected
