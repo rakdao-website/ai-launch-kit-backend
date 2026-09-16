@@ -297,7 +297,7 @@ def test_preview_refreshes_stale_demo_url_from_v0() -> None:
         )
 
     preview = asyncio.run(service(repository, v0_status=v0_status).preview("build-1"))
-    assert preview.url == "https://demo-fresh.vusercontent.net/?__v0_token=abc"
+    assert preview.url == "https://demo-fresh.vusercontent.net/"
     assert repository.build.preview_url == preview.url
     assert repository.commits == 2  # start + preview refresh
 
@@ -311,4 +311,16 @@ def test_preview_falls_back_to_stored_url_without_chat_reference() -> None:
     repository.provider_ref = None
 
     preview = asyncio.run(service(repository).preview("build-1"))
-    assert preview.url == "https://demo-stored.vusercontent.net/?__v0_token=old"
+    assert preview.url == "https://demo-stored.vusercontent.net/"
+
+
+def test_public_preview_url_strips_v0_token_only_for_demo_hosts() -> None:
+    from launchkit.builds.service import public_preview_url
+
+    assert (
+        public_preview_url("https://demo-abc.vusercontent.net/?__v0_token=secret&x=1")
+        == "https://demo-abc.vusercontent.net/"
+    )
+    assert public_preview_url("https://northstar.vercel.app/site") == "https://northstar.vercel.app/site"
+    assert public_preview_url(None) is None
+    assert public_preview_url("not-a-url") is None

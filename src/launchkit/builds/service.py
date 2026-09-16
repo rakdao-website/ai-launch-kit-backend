@@ -149,12 +149,11 @@ class BuildService:
         )
 
     async def preview(self, build_id: str) -> BuildPreviewView:
-        """Return a fresh v0 demo URL.
+        """Return a fresh v0 demo URL safe to open in a browser or iframe.
 
-        Stored ``preview_url`` values go stale: v0 rotates sandbox hosts and
-        attaches short-lived ``__v0_token`` query params. Opening the bare host
-        (or an expired token) shows a broken/404 shell even though generation
-        succeeded.
+        v0 attaches short-lived ``__v0_token`` query params that often 404 when
+        embedded or opened directly. The bare ``*.vusercontent.net`` host is the
+        stable public preview URL.
         """
         build = await self._repository.get_build(build_id, self._owner_id)
         if build is None:
@@ -169,7 +168,7 @@ class BuildService:
             reference_type="chat_id",
         )
         if chat is None:
-            url = safe_provider_url(build.preview_url)
+            url = public_preview_url(build.preview_url)
             if url is None:
                 raise DomainError("No preview is available for this website yet.")
             return BuildPreviewView(url=url)
@@ -178,9 +177,8 @@ class BuildService:
             raise ConfigurationError("v0 is required to refresh the website preview")
 
         result = await self._v0_status(chat.reference_value)
-        url = safe_provider_url(result.demo_url)
-        if url is None:
-            url = safe_provider_url(build.preview_url)
+        raw = safe_provider_url(result.demo_url) or safe_provider_url(build.preview_url)
+        url = public_preview_url(raw)
         if url is None:
             raise DomainError("v0 did not return a live preview URL for this website.")
 
@@ -197,6 +195,19 @@ def safe_provider_url(value: str | None) -> str | None:
     return value if parsed.scheme == "https" and parsed.netloc else None
 
 
+def public_preview_url(value: str | None) -> str | None:
+    """Strip v0 token query params; bare vusercontent hosts are the stable preview."""
+
+    url = safe_provider_url(value)
+    if url is None:
+        return None
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host == "vusercontent.net" or host.endswith(".vusercontent.net"):
+        return f"{parsed.scheme}://{parsed.netloc}/"
+    return url
+
+
 def build_view(record: BuildRecord) -> BuildView:
     active = record.status in ACTIVE_BUILD_STATUSES
     return BuildView(
@@ -207,7 +218,7 @@ def build_view(record: BuildRecord) -> BuildView:
         stage=record.stage,
         message=record.message,
         warnings=record.warnings,
-        preview_url=record.preview_url,
+        preview_url=public_preview_url(record.preview_url),
         web_url=record.web_url,
         download_url=f"/api/v1/builds/{record.id}/download"
         if record.status == "completed"

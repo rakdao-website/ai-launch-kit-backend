@@ -15,7 +15,7 @@ from launchkit.adapters.openrouter import OpenRouterAdapter
 from launchkit.adapters.pexels import PexelsAdapter
 from launchkit.adapters.v0 import V0Adapter
 from launchkit.assets import AssetBlobStore, project_asset_key, safe_filename
-from launchkit.builds.service import safe_provider_url
+from launchkit.builds.service import public_preview_url, safe_provider_url
 from launchkit.builds.state import TERMINAL_BUILD_STATUSES, transition_build
 from launchkit.core.config import Settings
 from launchkit.core.exceptions import ConfigurationError, ProviderError
@@ -305,7 +305,7 @@ class BuildJobHandlers:
         except ProviderError:
             demo = safe_provider_url(result.demo_url)
             web = safe_provider_url(result.web_url)
-        build.preview_url = demo
+        build.preview_url = public_preview_url(demo)
         build.web_url = web
         build.file_manifest = [{"name": name} for name in result.files]
         build.next_reconcile_at = None
@@ -452,9 +452,10 @@ async def demo_url_ready(client: httpx.AsyncClient | None, demo_url: str) -> boo
 
     if client is None:
         return True
+    probe_url = public_preview_url(demo_url) or demo_url
     try:
         response = await client.get(
-            demo_url,
+            probe_url,
             timeout=httpx.Timeout(5.0, read=8.0),
             headers={"User-Agent": "launchkit-readiness-probe"},
             follow_redirects=True,

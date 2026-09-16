@@ -5,7 +5,7 @@ from typing import Any
 import structlog
 from pydantic import BaseModel
 
-from launchkit.builds.service import GenerationQuotaExceededError
+from launchkit.builds.service import GenerationQuotaExceededError, public_preview_url
 from launchkit.core.config import Settings
 from launchkit.core.exceptions import DomainError
 from launchkit.persistence.models import BuildRecord, ProjectRecord
@@ -157,7 +157,9 @@ class ProjectService:
             company_name=company_name,
             latest_build_id=record.latest_build_id,
             latest_build_status=build.status if build is not None else None,
-            preview_url=build.preview_url if build is not None else None,
+            preview_url=(
+                public_preview_url(build.preview_url) if build is not None else None
+            ),
             download_url=download_url,
             created_at=record.created_at,
             updated_at=record.updated_at,
